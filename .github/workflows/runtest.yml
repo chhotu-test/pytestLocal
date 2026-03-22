@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Playwright Test Pipeline
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - preprod
+          - prod
+          - staging
+        default: preprod
+      browser:
+        description: "Browser to test"
+        required: true
+        type: choice
+        options:
+          - chromium
+          - firefox
+          - webkit
+        default: chromium
+      test_markers:
+        description: "Pytest markers (smoke, regression, login, critical) - leave empty for all"
+        required: false
+        type: string
+        default: ""
+      headless:
+        description: "Run in headless mode"
+        required: true
+        type: boolean
+        default: false
+      parallel_workers:
+        description: "Number of parallel workers"
+        required: false
+        type: number
+        default: 1
+
+env:
+  DEFAULT_ENV: preprod
+  DEFAULT_BROWSER: chromium
+  DEFAULT_HEADLESS: "false"
+  PYTHON_VERSION: "3.11"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "Tests [${{ github.event.inputs.environment || 'preprod' }}] [${{ github.event.inputs.browser || 'chromium' }}]"
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: ${{ github.event.inputs.environment || 'preprod' }}
+            browser: ${{ github.event.inputs.browser || 'chromium' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: python -m playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Set test variables
+        id: vars
+        shell: pwsh
+        run: |
+          $headless = "${{ github.event.inputs.headless || env.DEFAULT_HEADLESS }}"
+          $markers = "${{ github.event.inputs.test_markers || '' }}"
+          $workers = "${{ github.event.inputs.parallel_workers || '1' }}"
+
+          echo "headless=$headless" >> $env:GITHUB_OUTPUT
+          echo "markers=$markers" >> $env:GITHUB_OUTPUT
+          echo "workers=$workers" >> $env:GITHUB_OUTPUT
+
+          if ($markers -ne "") {
+            echo "marker_flag=-m $markers" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "marker_flag=" >> $env:GITHUB_OUTPUT
+          }
+
+          if ([int]$workers -gt 1) {
+            echo "worker_flag=-n $workers" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "worker_flag=" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Run tests
+        shell: pwsh
+        env:
+          ENV: ${{ matrix.environment }}
+          BROWSER: ${{ matrix.browser }}
+          HEADLESS: ${{ steps.vars.outputs.headless }}
+          VALID_USERNAME: ${{ secrets.VALID_USERNAME }}
+          VALID_PASSWORD: ${{ secrets.VALID_PASSWORD }}
+        run: |
+          $markerFlag = "${{ steps.vars.outputs.marker_flag }}"
+          $workerFlag = "${{ steps.vars.outputs.worker_flag }}"
+          $cmd = "pytest tests/ --env=${{ matrix.environment }} --browser-type=${{ matrix.browser }} --headless-mode=${{ steps.vars.outputs.headless }} $markerFlag $workerFlag --alluredir=reports/allure-results --html=reports/report.html --self-contained-html -v --tb=short"
+          Invoke-Expression $cmd
+
+      - name: Upload Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-${{ matrix.environment }}-${{ matrix.browser }}
+          path: reports/allure-results/
+          retention-days: 14
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report-${{ matrix.environment }}-${{ matrix.browser }}
+          path: reports/report.html
+          retention-days: 14
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ matrix.environment }}-${{ matrix.browser }}
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    name: Generate Allure Report
+    needs: test
+    if: always()
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Download Allure results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: allure-results-*
+          merge-multiple: true
+          path: allure-results
+
+      - name: Generate Allure report
+        uses: simple-elf/allure-report-action@v1.12
+        with:
+          allure_results: allure-results
+          allure_report: allure-report
+
+      - name: Upload Allure report
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report/
+          retention-days: 30
