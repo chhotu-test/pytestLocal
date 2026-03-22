@@ -29,3 +29,4 @@ videos/
 node_modules/
 allure-results/
 allure-report/
+pytestLocal/
