@@ -199,13 +199,22 @@ jobs:
         shell: cmd
         run: |
           pip install allure-combine
-          allure-combine allure-report --dest allure-report --auto-create-folders
+          python -m allure_combine.combine allure-report --dest allure-report --auto-create-folders
           echo Single-file Allure report created.
 
-      - name: Upload Allure report
+      - name: Upload Allure single-file report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-single
+          path: allure-report/complete.html
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Upload full Allure report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: allure-report
-          path: allure-report/complete.html
+          path: allure-report/
           retention-days: 30
