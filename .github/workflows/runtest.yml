@@ -35,7 +35,7 @@ on:
         description: "Run in headless mode"
         required: true
         type: boolean
-        default: true
+        default: false
       parallel_workers:
         description: "Number of parallel workers"
         required: false
@@ -45,7 +45,7 @@ on:
 env:
   DEFAULT_ENV: preprod
   DEFAULT_BROWSER: chromium
-  DEFAULT_HEADLESS: "true"
+  DEFAULT_HEADLESS: "false"
   PYTHON_VERSION: "3.11"
 
 concurrency:
@@ -55,7 +55,7 @@ concurrency:
 jobs:
   test:
     name: "Tests [${{ github.event.inputs.environment || 'preprod' }}] [${{ github.event.inputs.browser || 'chromium' }}]"
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, New8]
     timeout-minutes: 30
 
     strategy:
@@ -150,7 +150,7 @@ jobs:
     name: Generate Allure Report
     needs: test
     if: always()
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, New8]
     steps:
       - name: Download Allure results
         uses: actions/download-artifact@v4
@@ -159,11 +159,23 @@ jobs:
           merge-multiple: true
           path: allure-results
 
+      - name: Install Allure CLI
+        shell: pwsh
+        run: |
+          $allureVersion = "2.27.0"
+          $allureZip = "allure-$allureVersion.zip"
+          $allureUrl = "https://github.com/allure-framework/allure2/releases/download/$allureVersion/$allureZip"
+          if (!(Test-Path "allure-$allureVersion")) {
+            Invoke-WebRequest -Uri $allureUrl -OutFile $allureZip
+            Expand-Archive -Path $allureZip -DestinationPath . -Force
+            Remove-Item $allureZip
+          }
+
       - name: Generate Allure report
-        uses: simple-elf/allure-report-action@v1.12
-        with:
-          allure_results: allure-results
-          allure_report: allure-report
+        shell: pwsh
+        run: |
+          $allureBin = (Get-ChildItem -Path . -Filter "allure-*" -Directory | Select-Object -First 1).FullName + "\bin\allure.bat"
+          & $allureBin generate allure-results --clean -o allure-report
 
       - name: Upload Allure report
         uses: actions/upload-artifact@v4
